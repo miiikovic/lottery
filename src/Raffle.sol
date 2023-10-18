@@ -24,7 +24,8 @@
 
 pragma solidity ^0.8.18;
 
-import {VRFCoordinatorV2Interface} from "@chainlink/contracts/src/v0.8/interfaces/VRFCoordinatorV2Interface";
+import {VRFCoordinatorV2Interface} from "@chainlink/contracts/src/v0.8/interfaces/VRFCoordinatorV2Interface.sol";
+import {VRFConsumerBaseV2} from "@chainlink/contracts/src/v0.8/VRFConsumerBaseV2.sol";
 
 /**
  * @title A sample Raffle Contract
@@ -33,26 +34,37 @@ import {VRFCoordinatorV2Interface} from "@chainlink/contracts/src/v0.8/interface
  * @dev Implements Chainlink VRFv2
  */
 
-contract Raffle {
+contract Raffle is VRFConsumerBaseV2 {
     error Raffle__NotEnoughEthSent();
+    error Raffle__TransferFailed();
+    error Raffle__RaffleNotOpen();
+
+    /** Type declarations */
+    enum RaffleState {
+        OPEN,
+        CALCULATING
+    }
 
     /** State Variables */
-    uint256 private constant REQUEST_CONFIRMATIONS = 3;
-    uint256 private constant NUM_WORDS = 1;
+    uint16 private constant REQUEST_CONFIRMATIONS = 3;
+    uint32 private constant NUM_WORDS = 1;
 
     uint256 private immutable i_enteranceFee;
     // @dev Duration of the lottery in seconds
     uint256 private immutable i_interval;
-    address private immutable i_vrfCoordinator;
+    VRFCoordinatorV2Interface private immutable i_vrfCoordinator;
     bytes32 private immutable i_gasLane;
     uint64 private immutable i_subscriptionId;
     uint32 private immutable i_callbackGasLimit;
 
     address payable[] private s_players;
     uint256 private s_lastTimeStamp;
+    address private s_recentWinner;
+    RaffleState private s_raffleState;
 
     /** Events */
     event EnteredRaffle(address indexed player);
+    event PickedWinner(address indexed winner);
 
     constructor(
         uint256 enteranceFee,
@@ -61,19 +73,23 @@ contract Raffle {
         bytes32 gasLane,
         uint64 subscriptionId,
         uint32 callbackGasLimit
-    ) {
+    ) VRFConsumerBaseV2(vrfCoordinator) {
         i_enteranceFee = enteranceFee;
         i_interval = interval;
-        i_vrfCoordinator = vrfCoordinator;
+        i_vrfCoordinator = VRFCoordinatorV2Interface(vrfCoordinator);
         i_gasLane = gasLane;
         i_subscriptionId = subscriptionId;
         i_callbackGasLimit = callbackGasLimit;
         s_lastTimeStamp = block.timestamp;
+        s_raffleState = RaffleState.OPEN;
     }
 
     function enterRaffle() external payable {
         if (msg.value < i_enteranceFee) {
             revert Raffle__NotEnoughEthSent();
+        }
+        if (s_raffleState != RaffleState.OPEN) {
+            revert Raffle__RaffleNotOpen();
         }
         s_players.push(payable(msg.sender));
         // 1. Makes migration easier
@@ -89,6 +105,8 @@ contract Raffle {
             revert();
         }
 
+        s_raffleState = RaffleState.CALCULATING;
+
         // 1. Request the RNG <-
         // 2. Get the random number
         uint256 requestId = i_vrfCoordinator.requestRandomWords(
@@ -98,6 +116,33 @@ contract Raffle {
             i_callbackGasLimit,
             NUM_WORDS // how many random numbers
         );
+    }
+
+    // CEI: Checks, Effects, Interactions
+    function fulfillRandomWords(
+        uint256 requestId,
+        uint256[] memory randomWords
+    ) internal override {
+        //Checks
+
+        // Effects (Our own contract)
+        uint256 indexOfWinner = randomWords[0] % s_players.length;
+        address payable winner = s_players[indexOfWinner];
+
+        s_recentWinner = winner;
+        s_raffleState = RaffleState.OPEN;
+
+        s_players = new address payable[](0);
+        s_lastTimeStamp = block.timestamp;
+        emit PickedWinner(winner);
+
+        // Interacitons (Other contracts)
+        (bool success, ) = s_recentWinner.call{value: address(this).balance}(
+            ""
+        );
+        if (!success) {
+            revert Raffle__TransferFailed();
+        }
     }
 
     /** Getter Functions */
