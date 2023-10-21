@@ -126,7 +126,7 @@ contract Raffle is VRFConsumerBaseV2 {
     // 1. Get a random number
     // 2. Use the random number to pick a player
     // 3. Be automatically called
-    function performUpkeep() external {
+    function performUpkeep(bytes calldata /*performData*/) external {
         (bool upkeepNeeded, ) = checkUpkeep("");
         if (!upkeepNeeded) {
             revert Raffle__UpkeepNotNeeded(
@@ -180,5 +180,13 @@ contract Raffle is VRFConsumerBaseV2 {
 
     function getEnteranceFee() external view returns (uint256) {
         return i_enteranceFee;
+    }
+
+    function getRaffleState() external view returns (RaffleState) {
+        return s_raffleState;
+    }
+
+    function getPlayer(uint256 indexOfPlayer) external view returns (address) {
+        return s_players[indexOfPlayer];
     }
 }
